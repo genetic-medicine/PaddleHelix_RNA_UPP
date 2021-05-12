@@ -1,7 +1,9 @@
 # 螺旋桨RNA结构预测竞赛第一名方案
 
 ## 项目描述
-基于百度发布的RNA二级结构预测算法LinearFold和RNA配分方程算法LinearPartition，预测给定RNA序列在每个位点上保持不成对的概率
+基于百度发布的RNA二级结构预测算法LinearFold和RNA配分方程算法LinearPartition，预测给定RNA序列在每个位点上保持不成对的概率.
+
+详细说明请参照fly.ipynb中的文档内容.
 
 ## 项目结构
 ```
