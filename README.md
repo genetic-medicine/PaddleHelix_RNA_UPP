@@ -26,7 +26,7 @@
  
 所以框架由以上三个模块组成， 并在输入和输出层加了1-3个线性层。除非特意说明， 所有的隐藏层的维度为32.
 
-训练中发现高维度和深度的网络并不能给出更好的结果！
+训练中发现高维度和深度的网络构架并不能给出更好的结果！
 
 Three main mechanisms directing RNA base pairing are taken into consideration for the design of the network architecture. 
    1) The combinatorial configurational space of attainable RNA base pairs, approximated by Attention Mechanism
@@ -49,7 +49,7 @@ Wider and/or deeper nets gave similar, but no better, performances!
  6. 线性输出层 x 3, 维度为32, 32, 2 
 
 ### 损失函数:
- softmax+bce 和 softmax+mse 给相近的结果, 最后采用的是训练用softmax+bce, 然后用softmax+mse做检测.
+ softmax+bce 或 softmax+mse 给出相近的结果, 最后采用方法是训练用softmax+bce, 然后用softmax+mse验证.
 
 ### 优化方法:
  1. 优化器为adam, learning_rate=0.003 加 lr_scheduler (连续七次损失不降低, learning_rate减小10%)
