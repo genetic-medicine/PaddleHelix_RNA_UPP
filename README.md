@@ -10,7 +10,7 @@
 ## 训练数据: 
 
 ### 输入
-   1. 5000个RNA序列, 长度相较均匀分布在80和500之间
+   1. 5000个RNA序列, 长度较均匀分布在80和500之间
    2. Linear_fold计算的二级结构 (dot-bracket notation)
    3. Linear_partition计算的碱基对概率
     
@@ -28,8 +28,7 @@
 
 训练中发现高维度和深度的网络并不能给出更好的结果！
 
-Three main mechanisms directing RNA base pairing are taken into consideration for the 
- design of the network architecture. 
+Three main mechanisms directing RNA base pairing are taken into consideration for the design of the network architecture. 
    1) The combinatorial configurational space of attainable RNA base pairs, approximated by Attention Mechanism
    2) The quasi-1D nature of unbranched, continuous RNA polymers, approximated by LSTM
    3) The cooperativity of neighboring bases for stable base pairing, approximated by 1D Convolution
@@ -53,7 +52,7 @@ Wider and/or deeper nets gave similar, but no better, performances!
  softmax+bce 和 softmax+mse 给相近的结果, 最后采用的是训练用softmax+bce, 然后用softmax+mse做检测.
 
 ### 优化方法:
- 1. 优化器为adam, learning_rate=0.003 加 lr_scheduler (连续七次孙媳不降低, learning_rate减小10%)
+ 1. 优化器为adam, learning_rate=0.003 加 lr_scheduler (连续七次损失不降低, learning_rate减小10%)
  2. dropout=0.2 (鉴于网络较小)
  3. 无L1/L2正则化 (鉴于train/validation差异较小)
  4. 采用earlystop, 一个epoch检测10次, 如果validation loss降低, 存储模型
