@@ -18,25 +18,53 @@ def calc_padding(kernel_size, stride=1, dilation=1):
     return padding
 
 
-def position_encoding_trig(x_shape, curve='trig'):
-    """ x dim: [i=batch_size, j=seq_len, k=feature_dim] """
+# def position_encoding_trig(x_shape, curve='trig'):
+#     """ x dim: [i=batch_size, j=seq_len, k=feature_dim] """
+#     # x = mi.empty((args.batch_size, 50, 128), # args.feature_dim), dtype='float32')
+#     assert len(x_shape) >= 2
+
+#     jlen = x_shape[-2]
+#     klen = x_shape[-1]
+
+#     j = np.linspace(1, jlen, num=jlen, dtype='float32').reshape((jlen,1))
+#     k = np.linspace(1, klen, num=klen, dtype='float32').reshape((1,klen))
+
+#     k = (k + 1) // 2
+#     omega_k = 1 / 10000**(2*k/klen)
+#     omega_jk = np.matmul(j, omega_k)
+
+#     omega_jk[0::2,:] = np.sin(omega_jk[0::2,:])
+#     omega_jk[1::2,:] = np.cos(omega_jk[1::2,:])
+
+#     return mi.to_tensor(omega_jk)
+
+def position_encoding_trig(instance_size, base=10000, curve='trig'):
+    """ x dim: [i=batch_size, j=seq_len, k=feature_dim]
+    As the longest wavelength (for the last two dimensions) is 2pi*base, 
+    it appears reasonable for the final dimensions to stay within quarter
+    wavelength, in this case, 2pi*base > 4 * max_seqlen, base >~ 0.64*max_seqlen
+    """
     # x = mi.empty((args.batch_size, 50, 128), # args.feature_dim), dtype='float32')
-    assert len(x_shape) >= 2
+    assert len(instance_size) >= 2, "input dim must be at least 2"
+    assert instance_size[-1] % 2 == 0, "feature dim must be even"
 
-    jlen = x_shape[-2]
-    klen = x_shape[-1]
+    jlen = instance_size[-2]
+    klen = instance_size[-1]
+    base = mi.to_tensor(base, dtype='float32')
 
-    j = np.linspace(1, jlen, num=jlen, dtype='float32').reshape((jlen,1))
-    k = np.linspace(1, klen, num=klen, dtype='float32').reshape((1,klen))
+    j = mi.arange(0, jlen, 1, dtype='float32').reshape((jlen, 1))
+    k = mi.arange(0, klen // 2, 1, dtype='float32').reshape((1, klen // 2)) 
 
-    k = (k + 1) // 2
-    omega_k = 1 / 10000**(2*k/klen)
-    omega_jk = np.matmul(j, omega_k)
+    # omega_k = 1 / 10000 ** (2 * k / klen)
+    omega_k = mi.exp(-mi.log(base) * 2.0 / klen * k)
 
-    omega_jk[0::2,:] = np.sin(omega_jk[0::2,:])
-    omega_jk[1::2,:] = np.cos(omega_jk[1::2,:])
+    omega_jk = mi.matmul(j, omega_k)
 
-    return mi.to_tensor(omega_jk)
+    pe = mi.zeros((jlen, klen), dtype='float32')
+    pe[:, 0::2] = mi.sin(omega_jk)
+    pe[:, 1::2] = mi.cos(omega_jk)
+
+    return pe
 
 
 def get_attn_mask(x, seqs_len):
@@ -1443,26 +1471,18 @@ class Seq2Seq_AttnLSTMNet(nn.Layer):
 class Seq2Seq_AttnLSTMConv1DNet(nn.Layer):
     def __init__(self, args):
         super(Seq2Seq_AttnLSTMConv1DNet, self).__init__()
-        nn.initializer.set_global_initializer(nn.initializer.KaimingNormal(), nn.initializer.Constant(0.0))
+        nn.initializer.set_global_initializer(nn.initializer.KaimingNormal(),
+                                              nn.initializer.Constant(0.0))
 
         self.data_format = args.input_fmt.upper()
         self.feature_dim = int(args.feature_dim)
 
-        in_features = self.feature_dim # keep record of current feature dim
+        self.embed = MyEmbeddingLayer(args, in_features=self.feature_dim)
+        self.fc_in = MyLinearTower(args, in_features=self.embed.out_features)
+        self.attn = MyAttnTower(args, in_features=self.fc_in.out_features)
+        self.lstm = MyLSTMTower(args, in_features=self.attn.out_features)
+        self.conv1d = MyConv1DTower(args, in_features=self.lstm.out_features)
 
-        self.embed = MyEmbeddingLayer(args, in_features=in_features)
-        in_features = self.embed.out_features
-
-        self.linear_in = MyLinearTower(args, in_features=in_features)
-        in_features = self.linear_in.out_features
-
-        self.attn = MyAttnTower(args, in_features=in_features)
-        in_features = self.attn.out_features
-
-        self.lstm = MyLSTMTower(args, in_features=in_features)
-        in_features = self.lstm.out_features
-
-        self.conv1d = MyConv1DTower(args, in_features=in_features)
         in_features = self.conv1d.out_features
 
         self.output_dim = [int(_i) for _i in args.output_dim]  \
@@ -1496,7 +1516,7 @@ class Seq2Seq_AttnLSTMConv1DNet(nn.Layer):
     def forward(self, x, seqs_len=None):
 
         x = self.embed(x)
-        x = self.linear_in(x, seqs_len=seqs_len)
+        x = self.fc_in(x, seqs_len=seqs_len)
         x = self.attn(x, seqs_len=seqs_len)
         x = self.lstm(x, seqs_len=seqs_len)
         x = self.conv1d(x)

@@ -5,6 +5,7 @@ import re
 import sys
 import glob
 import logging
+import misc
 import json
 import functools
 import pickle
@@ -15,10 +16,6 @@ import bz2
 from pathlib import Path as path
 import numpy as np
 import pandas as pd
-
-# homebrew
-import misc
-
 logger = logging.getLogger(__name__)
 
 
