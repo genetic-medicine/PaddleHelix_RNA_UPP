@@ -751,25 +751,6 @@ def get_optimizer(upp_net, args):
     return upp_opt, learning_rate
 
 
-def f_score(input, label, batch=False, beta=1.0, epsilon=1e-7, **kwargs):
-    """ beta is used to weight recall relative to precision """
-    assert input.ndim == label.ndim, 'Input and Label must have the same # of dims!'
-
-    if batch:
-        sum_axis = list(range(1, input.ndim))
-    else:
-        sum_axis = list(range(0, input.ndim))
-
-    tp = (input * label).sum(sum_axis)
-    fp = (input * (1.0 - label)).sum(sum_axis)
-    fn = ((1.0 - input) * label).sum(sum_axis)
-    # tn = ((1 - input) * (1 - label)).sum()
-
-    beta2 = beta * beta
-    fscore = (1.0 + beta2) * tp / ((1.0 + beta2) * tp + beta2 * fp + fn + epsilon)
-    return fscore
-
-
 def sigmoid_mse(input, label, reduction='none'):
     input = F.sigmoid(input)
     loss = F.mse_loss(input, label, reduction=reduction)
@@ -824,94 +805,6 @@ def softmax_bce(input, label, label_col=1, reduction='none'):
         loss = loss.mean()
     
     return loss
-
-
-class SeqLossFn_Agg(nn.Layer):
-    """ calculate the aggregated loss for input vs. label 
-    meant for loss_fn which cannot give point to point loss contributions
-    """
-    def __init__(self, fn=f_score, name='fscore', **kwargs):
-        super(SeqLossFn_Agg, self).__init__()
-
-        self.name = name.lower()
-        self.fn = fn
-        self.kwargs = kwargs
-
-    def as_label(self, input):
-        if self.name in ['fscore', 'f-score']:
-            input = F.softmax(input, axis=-1)
-            _, input = mi.unstack(input, axis=-1)
-        else:
-            logger.critical(f'Cannot recognize loss_fn name: {self.name}!')
-
-        return input
-        
-    def forward(self, input, label, seqs_len=None, loss_padding=False, loss_sqrt=False, **kwargs):
-        """ return the loss with the shape as input """
-
-        fn_kwargs = self.kwargs.copy()
-        fn_kwargs.update(kwargs)
-
-        if self.name == 'fscore':
-            # the data is supposed to be before softmax (last dimension with shape of 2), and label may have the final dimension as 1
-            # input = mi.unstack(input, axis=-1)
-            # input = mi.squeeze(mi.greater_equal(input[:,:,:,1], input[:,:,:,0] * 2.71828), axis=-1)
-            # input = F.softmax(input, axis=-1)
-            # input = mi.squeeze(input[:,:,:,1], axis=-1)
-            # label = mi.squeeze(label, axis=-1)
-            # if not isinstance(label, mi.Tensor) or label.dtype.name != 'INT64':
-                # label = mi.to_tensor(label, dtype='int64')
-            input = self.as_label(input)
-        else:
-            logger.critical(f'loss fn: {self.name} not supported yet!')
-
-        batch_size = input.shape[0]
-
-        logger.debug(f'     num_dims: {input.ndim}')
-        logger.debug(f'    data size: {batch_size}')
-        logger.debug(f'     seqs_len: {seqs_len is not None}')
-        logger.debug(f' loss_padding: {loss_padding}')
-        logger.debug(f'  loss kwargs: {fn_kwargs}')
-
-        loss_for_backprop = mi.to_tensor(0.0, dtype='float32', stop_gradient=False)
-        loss_vs_seq = np.zeros((batch_size), dtype=np.float32)
-        std_vs_seq = np.zeros((batch_size), dtype=np.float32)
-        for i in range(batch_size):
-            seq_len = int(seqs_len[i])
-
-            if loss_padding or input.ndim == 1: # process loss_mat as a whole
-                seq_loss = self.fn(input[i], label[i], **fn_kwargs)
-            elif input.ndim == 2:
-                seq_loss = self.fn(input[i, :seq_len], label[i, :seq_len], **fn_kwargs)
-            elif input.ndim == 3:
-                seq_loss = self.fn(input[i, :seq_len, :seq_len],
-                                   label[i, :seq_len, :seq_len],
-                                   **fn_kwargs)
-            elif input.ndim == 4:
-                seq_loss = self.fn(input[i, :seq_len, :seq_len, :seq_len],
-                                   label[i, :seq_len, :seq_len, :seq_len],
-                                   **fn_kwargs)
-            elif input.ndim == 5:
-                seq_loss = self.fn(input[i, :seq_len, :seq_len, :seq_len, :seq_len],
-                                   label[i, :seq_len, :seq_len, :seq_len, :seq_len],
-                                   **fn_kwargs)
-            else:
-                logger.critical('too many dimensions for y_model, unsupported!')
-
-            if loss_sqrt:
-                loss_for_backprop += mi.sqrt(seq_loss)
-                loss_vs_seq[i] = np.sqrt(seq_loss.numpy())
-                # std_vs_seq[i] = np.sqrt(seq_loss.numpy().std())
-            else:
-                loss_for_backprop += seq_loss
-                loss_vs_seq[i] = seq_loss.numpy()
-                # std_vs_seq[i] = seq_loss.numpy().std()
-
-        loss_for_backprop = 1.0 - loss_for_backprop
-        loss_vs_seq = 1.0 - loss_vs_seq
-        # logger.info(f'f1 score: {loss_for_backprop.numpy()}')
-
-        return loss_for_backprop, loss_vs_seq, std_vs_seq
 
 
 class SeqLossFn_P2P(nn.Layer):
@@ -1094,10 +987,6 @@ def get_loss_fn(args):
     if 'softmax+crossentropy' in args.loss_fn or 'softmax+ce' in args.loss_fn:
         loss_fn.append(SeqLossFn_P2P(F.softmax_with_cross_entropy, name='softmax+crossentropy',
                 soft_label=args.label_tone.lower() == 'soft'))
-                
-    if 'fscore' in args.loss_fn or 'f-score' in args.loss_fn:
-        loss_fn.append(SeqLossFn_Agg(f_score, name='fscore',
-                label_col=1, batch=False, beta=1.0, epsilon=1e-7))
 
     if len(loss_fn) == 0:
         logger.critical(f'not supported loss functions found in: {args.loss_fn}!')
@@ -1209,11 +1098,6 @@ def train(model, midata, **kwargs):
     if args.save_dir: args.save_dir.mkdir(parents=True, exist_ok=True)
     model.args.update(vars(args)) # args should not change anymore
 
-    # XQ: do not need this yet, save it for later
-    # num_workers = mi.distributed.ParallelEnv().nranks
-    # work_site = mi.CUDAPlace(mi.distributed.ParallelEnv().dev_id) if num_workers > 1 else mi.CUDAPlace(0)
-    # exe = mi.Executor(work_site)
-
     if args.data_size > 0:
         if args.data_size < len(midata):
             midata = random_sample(midata, size=args.data_size, replace=False)
@@ -1226,8 +1110,6 @@ def train(model, midata, **kwargs):
     model.num_batches = len(miloader)
     model.num_data = len(midata)
 
-    # model.train_loss = np.zeros((model.num_data * args.num_epochs, 7), dtype=np.float32)
-    # model.train_loss = np.zeros((my_args.num_epochs * model.num_batches, 9), dtype=np.float)
     model.train_loss = [] # a list of DataFrames (concatenated at the end)
     validate_hist = misc.Struct(valid_loss=[]) # consider to include this in the model structure?
     model.validate_hist  = validate_hist
@@ -1246,7 +1128,6 @@ def train(model, midata, **kwargs):
 
     # temporary vars for journaling, not saved to files
     loss_vs_epoch = pd.DataFrame() # np.array([], dtype=np.float32)
-    # loss_vs_batch = pd.DataFrame() # do not need this yet
     loss_for_recap, std_for_recap = [], [] # accumulate results between recaps
 
     model.net.train()
@@ -1259,11 +1140,6 @@ def train(model, midata, **kwargs):
             x, y_truth = data[0], data[-1]
             seqs_len, seqs_idx = data[1][:, 0], data[1][:, 1]
 
-            # if not isinstance(y_truth, mi.Tensor) or y_truth.dtype.name != 'FP32':
-            #     y_truth = mi.to_tensor(y_truth, dtype='float32')
-            # if not isinstance(seqs_len, mi.Tensor) or seqs_len.dtype.name != 'INT32':
-                # seqs_len = mi.to_tensor(seqs_len, dtype='int32')
-
             if x.ndim > 1 and x.shape[0] == 1 and x.shape[1] > seqs_len[0] and not args.loss_padding:
                 x = cut_padding(x, int(seqs_len[0]))
                 y_truth = cut_padding(y_truth, int(seqs_len[0]))
@@ -1273,43 +1149,6 @@ def train(model, midata, **kwargs):
             num_seqs = y_model.shape[0]
             seqs_len, seqs_idx = seqs_len.numpy(), seqs_idx.numpy()
 
-            # if args.loss_padding: # inlucde loss from padded sequences
-            #     loss_for_backprop = model.loss_fn(y_model, y_truth, reduction='none')
-            #     # F.mse_loss(y_model, y_truth, reduction='none')
-            #     std_vs_seq = np.sqrt(loss_for_backprop.numpy().std(axis=-1)) # for recap and log
-
-            #     loss_for_backprop = mi.sqrt(mi.mean(loss_for_backprop, axis=-1))
-            #     loss_vs_seq = loss_for_backprop.numpy() # for recap and log
-
-            #     loss_for_backprop = loss_for_backprop.sum()
-            # else:
-            #     loss_for_backprop = mi.to_tensor(0.0, dtype='float32')
-            #     loss_vs_seq = np.zeros((num_seqs, ), dtype=np.float32)
-            #     std_vs_seq = np.zeros((num_seqs, ), dtype=np.float32)
-
-            #     for i in range(num_seqs):
-            #         seq_len = int(seqs_len[i])
-            #         if len(y_model.shape) == 1:
-            #             seq_loss = model.loss_fn(y_model[i], y_truth[i])
-            #         elif len(y_model.shape) == 2:
-            #             seq_loss = model.loss_fn(y_model[i, :seq_len], y_truth[i, :seq_len])
-            #         elif len(y_model.shape) == 3:
-            #             seq_loss = model.loss_fn(y_model[i, :seq_len, :seq_len],
-            #                                      y_truth[i, :seq_len, :seq_len])
-            #         elif len(y_model.shape) == 4:
-            #             seq_loss = model.loss_fn(y_model[i, :seq_len, :seq_len, :seq_len],
-            #                                      y_truth[i, :seq_len, :seq_len, :seq_len])
-            #         else:
-            #             logger.critical('too many dimensions for y_model, unsupported!')
-
-            #         # F.mse_loss(y_model[i, :seq_len], y_truth[i, :seq_len], reduction='none')
-            #         loss_for_backprop += mi.sqrt(mi.mean(seq_loss))
-
-            #         numpy_tmp = seq_loss.numpy()
-            #         std_vs_seq[i] = np.sqrt(numpy_tmp.std())
-            #         loss_vs_seq[i] = np.sqrt(numpy_tmp.mean())
-
-            # acc = mi.metric.accuracy(mi.flatten(y_model), mi.flatten(y_truth))
             loss_for_backprop = mi.to_tensor(0.0, dtype='float32', stop_gradient=False)
             loss_vs_seq = np.zeros((num_seqs), dtype=np.float32)
             std_vs_seq = np.zeros((num_seqs), dtype=np.float32)
@@ -1321,7 +1160,6 @@ def train(model, midata, **kwargs):
                 loss_vs_seq += _loss_vs_seq
                 std_vs_seq += _std_vs_seq
 
-            # loss = loss_for_backprop.mean() # + 1 / ( 1 + 2 * mi.square(y_model - 0.5).mean())
             loss_for_backprop.backward() # loss is loss_per_batch by convention
             if args.verbose > 1:
                 print("Current state of net parameters:")
@@ -1370,13 +1208,7 @@ def train(model, midata, **kwargs):
         loss_one_epoch = pd.DataFrame(loss_one_epoch, columns=['ibatch', 'loss', 'loss_std', 'seq_len', 'idx','epoch', 'batch'])
         model.train_loss.append(loss_one_epoch) # this will be saved as csv
 
-        # loss_vs_epoch = np.concatenate((loss_vs_epoch, loss_one_epoch.mean(axis=0, keepdims=True)), axis=0)
-        # loss_vs_epoch.append(model.train_loss[istart:iend, 1].mean())
-
-        # Need to check whether pd.append and pd.grouby retains the order
-
         loss_vs_epoch = loss_vs_epoch.append(loss_one_epoch.mean(), ignore_index=True)
-        # loss_vs_batch = loss_vs_batch.append(loss_one_epoch.groupby('batch').mean(), ignore_index=True)
 
         logger.info(f'Epoch {model.epoch} average training loss: ' +
                     f'\033[0;46m{loss_vs_epoch.loss.iat[-1]:6.4f}\033[0m' +
@@ -1461,9 +1293,6 @@ def validate(model, midata, **kwargs):
             x, y_truth,= data[0], data[-1]
             seqs_len, seqs_idx = data[1][:,0], data[1][:,1]
 
-            # if not isinstance(y_truth, mi.Tensor) or y_truth.dtype.name != 'FP32':
-            #     y_truth = mi.to_tensor(y_truth, dtype='float32')
-
             if x.ndim > 1 and x.shape[0] == 1 and x.shape[1] > seqs_len[0] and not args.loss_padding:
                 x = cut_padding(x, int(seqs_len[0]))
                 y_truth = cut_padding(y_truth, int(seqs_len[0]))
@@ -1472,15 +1301,6 @@ def validate(model, midata, **kwargs):
 
             num_seqs = y_model.shape[0]
             seqs_len, seqs_idx = seqs_len.numpy(), seqs_idx.numpy()
-
-            # loss_vs_seq = np.zeros((num_seqs,), dtype=np.float32)
-            # std_vs_seq = np.zeros((num_seqs,), dtype=np.float32)
-
-            # for i in range(num_seqs):
-            #     seq_len = int(seqs_len[i])
-            #     seq_loss = F.mse_loss(y_model[i, :seq_len], y_truth[i, :seq_len], reduction='none').numpy()
-            #     loss_vs_seq[i] = np.sqrt(seq_loss.mean())
-            #     std_vs_seq[i] = np.sqrt(seq_loss).std()
 
             loss_vs_seq = np.zeros((num_seqs), dtype=np.float32)
             std_vs_seq = np.zeros((num_seqs), dtype=np.float32)
@@ -1559,45 +1379,19 @@ def predict(model, midata, **kwargs):
                 x = cut_padding(x, int(seqs_len[0]))
                 y_truth = cut_padding(y_truth, int(seqs_len[0]))
 
-            # y_model = upp_model.net(mi.unsqueeze(x, 0)) # add the batch_size dim
             y_model = model.net(x, seqs_len)
             num_seqs = y_model.shape[0]
 
             istart = ibatch * args.batch_size
             iend = istart + num_seqs
-            # y_model_all[istart:iend, :] = y_model.numpy()
             y_model_all.extend(y_model.numpy())
             seqs_len_all[istart:iend] = seqs_len.numpy()
 
             prog_bar.update(num_seqs)
             if args.save_dir:
-                # in the case of multiple loss_fns, their as_label() should give the same results
-                # for loss_fn in model.loss_fn:
                 y_model = model.loss_fn[0].as_label(y_model)
                 save_model_prediction(y_model.numpy(), args.save_dir, seqs_len=seqs_len,
                             istart=ibatch * args.batch_size + 1, stem='predict')
-
-                # for i in range(num_seqs):
-                #     seq_len = int(seqs_len[i])
-                #     if y_model.ndim == 1:
-                #         y_save = y_model[i]
-                #     elif y_model.ndim == 2:
-                #         y_save = y_model[i, :seq_len]
-                #     elif y_model.ndim == 3:
-                #         y_save = y_model[i, :seq_len, :seq_len]
-                #     elif y_model.ndim == 4:
-                #         y_save = y_model[i, :seq_len, :seq_len, :seq_len]
-                #     else:
-                #         logger.critical('too many dimensions to save')
-                    
-                #     if y_model.ndim < 4:
-                #         np.savetxt(args.save_dir / f'{ibatch * args.batch_size + i + 1}.predict.txt',
-                #                     y_save.numpy(), fmt='%6.4f')
-                #     else:
-                #         np.save(args.save_dir / f'{ibatch * args.batch_size + i + 1}.predict', y_save.numpy())
-
-            # if ibatch % recap_interval == 0:
-                # logger.info(f'{ibatch} out of {data_size} ({int(ibatch / data_size * 100)}%) done')
 
     logger.info(f'Completed prediction of {data_size} samples')
     return y_model_all, seqs_len_all
@@ -1645,10 +1439,6 @@ def state_dict_load(upp_model, fdir=path.cwd()):
 
 def get_model(args, quiet=False):
     """  """
-    # model = mi.Model(upp_net)
-    # model.prepare(upp_opt, loss_fn)
-    # model.fit(train_dataset, epochs=NUM_EPOCHS, batch_size=BATCH_SIZE, log_freq=200)
-    # model.evaluate(test_data, log_freq=20, batch_size=BATCH_SIZE)
     upp_model = misc.Struct()
     upp_model.args = args
     upp_model.net = get_net(args, quiet=quiet)
@@ -1691,8 +1481,6 @@ def validate_in_train(model=None, midata=None, history=misc.Struct(), **kwargs):
     valid_loss_std = valid_loss.loss_std.mean()
     logger.info(f'loss: \033[0;32m{valid_loss_avg:6.4f}\033[0m, std: {valid_loss_std:6.4f}')
 
-    # configs.valid_loss = configs.valid_loss.append(valid_loss.assign(ibatch=configs.ibatch,
-    #             epoch=configs.epoch, batch=configs.batch), ignore_index=True)
     configs.valid_loss.append(valid_loss.assign(ibatch=configs.ibatch,
                 epoch=configs.epoch, batch=configs.batch))
 
@@ -1722,8 +1510,6 @@ def validate_in_train(model=None, midata=None, history=misc.Struct(), **kwargs):
                 shutil.rmtree(old_save_dir)
 
     return configs
-    # model.valid_rmsd[model.epoch*num_recaps + model.batch // update_interval, :] = \
-        # [model.epoch*len(miloader)+model.batch, valid_rmsd_avg, model.epoch, model.batch]
 
 
 def scan_data_args(args, midata, data_sizes=None, batch_sizes=None, **kwargs):
@@ -1787,11 +1573,6 @@ def scan_data_args(args, midata, data_sizes=None, batch_sizes=None, **kwargs):
         scan_train_loss.append(model.train_loss.assign(data_size=data_size, batch_size=batch_size))
         scan_valid_loss.append(model.valid_loss.assign(data_size=data_size, batch_size=batch_size))
 
-        # np.tile([data_size, batch_size], (train_loss.shape[0], 1))
-        # train_rmsd[-1,-2]: the last epoch
-        # last_train_epoch = train_loss[train_loss.epoch == train_loss.epoch.iat[-1]]
-        # last_estop_epoch = estop_loss[estop_loss.epoch == train_loss.epoch.iat[-1]]
-
         scan_best_loss = scan_best_loss.append(dict(
                     data_size = data_size,
                     batch_size = batch_size,
@@ -1814,15 +1595,6 @@ def scan_data_args(args, midata, data_sizes=None, batch_sizes=None, **kwargs):
             save_file = args.save_dir / (save_prefix + '_best.csv')
             scan_best_loss.to_csv(save_file, index=False, float_format='%.4g')
             logger.info(f'Saved scan summary: {save_file}')
-
-        # valid_loss = validate(model, valid_data, args=args, save_dir=None, shuffle=False, batch_size=512)
-        # scan_best_loss[i,[4,5]] = valid_loss.loc[:,['loss', 'loss_std']].mean(axis=0)
-        # scan_valid_loss.append(valid_loss.assign(
-        #     data_size = [data_size] * valid_loss.shape[0],
-        #     batch_size = [batch_size] * valid_loss.shape[0]))
-
-        # np.append(np.tile([data_size, batch_size], (valid_rmsd.shape[0], 1)),
-        #     valid_rmsd, axis=1)
 
     return scan_best_loss
 
@@ -1877,12 +1649,6 @@ def scout_args(args, train_set, valid_set=None, arg_names=None, arg_values=None,
 
         scan_best_loss.loc[i, 'train_loss'] = model.train_loss_vs_epoch.loss.min()
         scan_best_loss.loc[i, 'valid_loss'] = model.valid_loss_vs_epoch.loss.min()
-
-        # if valid_data is None: continue
-
-        # valid_loss = validate(model, valid_data, args=args, save_dir=None, batch_size=512)
-        # scan_best_loss.loc[i, ['valid_loss', 'valid_loss_std']] = valid_loss.loc[:,['loss', 'loss_std']].mean(axis=0)
-        # scan_valid_loss.append(valid_loss.assign(**scan_args))
 
         # Saving results
         if args.save_dir: # save all the train and valid curves from each call
@@ -2021,8 +1787,6 @@ def fly(args, **kwargs):
             train(model, train_data_xv, save_dir=save_dir_xv, validate_callback=callback_func)
 
     if 'scan_data' in action_list:
-        # if args.resume and args.load_dir:
-            # state_dict_load(model, fdir=args.load_dir)
 
         gwio.dict2json(vars(args), fname='args.json', fdir=args.save_dir)
         args.net_src_file = save_net_pycode(args.net_src_file, args.save_dir)
@@ -2041,8 +1805,6 @@ def fly(args, **kwargs):
         )
 
     if 'scout_args' in action_list:
-        # if args.resume and args.load_dir:
-            # state_dict_load(model, fdir=args.load_dir)
 
         if len(args.arg_values) != len(args.arg_names):
             logger.critical('arg names and values must of the same length!')
@@ -2171,8 +1933,6 @@ def fly(args, **kwargs):
 
             midata = bake_midata(pkldata, model_args)
             y_truth = [midata[i][-1] for i in range(num_seqs)]
-
-            # rmsd_curve = validate(model, midata, shuffle=False, save_dir=None)
 
             # compute ymodel, a list of predicted numpy arrays for each
             y_output, seqs_len = predict(model, midata, shuffle=False, batch_size=args.batch_size,

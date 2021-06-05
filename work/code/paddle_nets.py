@@ -18,26 +18,6 @@ def calc_padding(kernel_size, stride=1, dilation=1):
     return padding
 
 
-# def position_encoding_trig(x_shape, curve='trig'):
-#     """ x dim: [i=batch_size, j=seq_len, k=feature_dim] """
-#     # x = mi.empty((args.batch_size, 50, 128), # args.feature_dim), dtype='float32')
-#     assert len(x_shape) >= 2
-
-#     jlen = x_shape[-2]
-#     klen = x_shape[-1]
-
-#     j = np.linspace(1, jlen, num=jlen, dtype='float32').reshape((jlen,1))
-#     k = np.linspace(1, klen, num=klen, dtype='float32').reshape((1,klen))
-
-#     k = (k + 1) // 2
-#     omega_k = 1 / 10000**(2*k/klen)
-#     omega_jk = np.matmul(j, omega_k)
-
-#     omega_jk[0::2,:] = np.sin(omega_jk[0::2,:])
-#     omega_jk[1::2,:] = np.cos(omega_jk[1::2,:])
-
-#     return mi.to_tensor(omega_jk)
-
 def position_encoding_trig(instance_size, base=10000, curve='trig'):
     """ x dim: [i=batch_size, j=seq_len, k=feature_dim]
     As the longest wavelength (for the last two dimensions) is 2pi*base, 
@@ -443,8 +423,6 @@ class MyLSTMTower(nn.Layer):
         self.out_features = in_features
 
     def forward(self, x, seqs_len=None):
-        # if not isinstance(x, mi.Tensor) or x.dtype.name != 'FP32':
-        #     x = mi.to_tensor(x, dtype='float32')
 
         for lstm in self.lstm_layers:
             if self.lstm_resnet:
@@ -493,7 +471,7 @@ class MyAttnTower(nn.Layer):
             activation = self.act_fn, # (default: relu)
             attn_dropout = self.attn_dropout, # for self-attention target
             act_dropout = self.attn_ffdropout, # after activation in feedforward
-            normalize_before = True, # between layers (appears important for upp prediction)
+            normalize_before = True, # between layers
             weight_attr = None,
             bias_attr = None,
         )
@@ -575,8 +553,6 @@ class MyConv1DTower(nn.Layer):
         self.out_features = in_features
 
     def forward(self, x, seqs_len=None):
-        # if not isinstance(x, mi.Tensor) or x.dtype.name != 'FP32':
-        #     x = mi.to_tensor(x, dtype='float32')
 
         for conv1d in self.conv1d_layers:
             if self.conv1d_resnet:
@@ -644,8 +620,6 @@ class MyConv2DTower(nn.Layer):
         self.out_features = in_features
 
     def forward(self, x, seqs_len=None):
-        # if not isinstance(x, mi.Tensor) or x.dtype.name != 'FP32':
-        #     x = mi.to_tensor(x, dtype='float32')
 
         for conv2d in self.conv2d_layers:
             if self.conv2d_resnet:
@@ -741,42 +715,6 @@ class LazyLinearNet(nn.Layer):
                 is_return = True,
         )
 
-        # self.act_fn = args.act_fn
-        # self.norm_fn = args.norm_fn
-        # self.norm_axis = int(args.norm_axis)
-        # self.dropout = float(args.dropout)
-
-        # self.data_format = 'NLC'
-        # self.feature_dim = args.feature_dim
-
-        # self.linear_dim = [int(_i) for _i in args.linear_dim] \
-        #         if hasattr(args.linear_dim, '__len__') else [int(args.linear_dim)]
-        # self.linear_num = int(args.linear_num)
-        # self.linear_resnet = args.linear_resnet
-
-        # # the first layer to use feature_dim as the 1st dimension
-        # in_features = self.feature_dim
-        # self.leg1_linear = [] # addditional layers if needed
-        # for i in range(self.linear_num):
-        #     self.leg1_linear.append(nn.Sequential(*MyLinearBlock(
-        #             [in_features] + self.linear_dim,
-        #             dropout = self.dropout,
-        #             act_fn = self.act_fn,
-        #             norm_fn = self.norm_fn,
-        #             norm_axis = self.norm_axis,
-        #             data_format = self.data_format
-        #     )))
-        #     in_features = self.linear_dim[-1]
-
-        #     self.add_sublayer(f'leg1_linear{i}', self.leg1_linear[i])
-        #     # setattr(self, f'blk1layer{i}', self.blk1_linear[i])
-
-        # self.out = nn.Sequential(
-        #     nn.Linear(in_features=in_features, out_features=2),
-        #     # nn.ReLU(),
-        #     nn.Softmax(axis=-1),
-        # )
-
     def summary(self, input_size=None):
         if input_size is None:
             if hasattr(self.embed, 'embed'):
@@ -792,13 +730,6 @@ class LazyLinearNet(nn.Layer):
         x = self.embed(x)
         x = self.linear_in(x, seqs_len=seqs_len)
         x = self.out(x)
-
-        # if predict:
-            # x = mi.squeeze(x[:,:,1], axis=-1)
-            # if self.norm_axis is not None:
-            #     logger.debug(f'applying axis norm for axis: {self.norm_axis}')
-            #     x -= mi.mean(x, axis=self.norm_axis, keepdim=True)
-            #     x /= mi.sqrt(mi.var(x, axis=self.norm_axis, keepdim=True) + 1e-6)
 
         return x
 
@@ -862,7 +793,6 @@ class Seq2Seq_LSTMNet(nn.Layer):
         logger.debug('Applying self.out()')
         x = self.out(x)
         return x
-        # return mi.squeeze(x, axis=-1)
 
 
 class Seq2Seq_Conv1DNet(nn.Layer):
@@ -910,9 +840,6 @@ class Seq2Seq_Conv1DNet(nn.Layer):
         x = self.linear_in(x, seqs_len=seqs_len)
         x = self.conv1d(x, seqs_len=seqs_len)
         x = self.out(x)
-
-        # if predict:
-            # x = mi.squeeze(x[:,:,1], axis=-1)
 
         return x
 
@@ -1524,265 +1451,3 @@ class Seq2Seq_AttnLSTMConv1DNet(nn.Layer):
         x = self.out(x)
 
         return x
-
-
-class Seq2Mat_Conv2DNet(nn.Layer):
-    """ This ignores all inter-residue information  """
-    def __init__(self, args):
-        super(Seq2Mat_Conv2DNet, self).__init__()
-        nn.initializer.set_global_initializer(nn.initializer.KaimingNormal(), nn.initializer.Constant(0.0))
-
-        self.act_fn = args.act_fn
-        self.norm_fn = args.norm_fn
-        self.dropout = float(args.dropout)
-        self.norm_axis = int(args.norm_axis)
-
-        self.data_format = 'NLC'
-        self.feature_dim = int(args.feature_dim)
-
-        in_features = self.feature_dim # keep record of current feature dim
-
-        self.embed = MyEmbeddingLayer(args, in_features=in_features)
-        in_features = self.embed.out_features
-
-        self.linear_in = MyLinearTower(args, in_features=in_features)
-        in_features = self.linear_in.out_features
-
-        in_features = in_features * 2 # due to outer concatenation
-        self.conv2d = MyConv2DTower(args, in_features=in_features)
-        in_features = self.conv2d.out_features
-
-        self.linear_out_list = []
-        for i in range(2):
-            self.linear_out_list.append(nn.Sequential(*MyLinearBlock(
-                [in_features, in_features], #, feature_dim // 2],
-                dropout = self.dropout,
-                act_fn = self.act_fn,
-                norm_fn = self.norm_fn,
-                data_format = self.data_format,
-            )))
-            in_features = in_features
-
-            self.add_sublayer(f'leg3_linear{i}', self.linear_out_list[i])
-            # setattr(self, f'blk3layer{i}', self.blk3_linear[i])
-
-        self.out = nn.Sequential(
-            nn.Linear(in_features=in_features, out_features=2),
-            # nn.ReLU(),
-            # nn.Softmax(axis=-1),
-        )
-
-    def forward(self, x, seqs_len=None):
-        # x starts with [N:batch_size, L:seq_len, C:channel/feature_dim]
-        # [N, L, C] --> [N, L, self.linear_dim[-1]]
-
-        x = self.embed(x)
-        x = self.linear_in(x, seqs_len=seqs_len)
-
-        # for each channel/feature, get a LxL matrix
-        x = mi.transpose(x, perm=[0, 2, 1]) # [NLC] --> [NCL]
-        new_shape = [x.shape[0], x.shape[1], x.shape[2], x.shape[2]]
-        x = mi.concat([mi.broadcast_to(mi.unsqueeze(x, axis=3), shape=new_shape),
-                       mi.broadcast_to(mi.unsqueeze(x, axis=2), shape=new_shape)],
-                       axis=1) # [NCLL] --> [N, 2*C, L, L]
-
-        x = self.conv2d(x, seqs_len=seqs_len)
-
-        x = mi.transpose(x, perm=[0, 3, 2, 1]) # --> [N, L, L, 2*conv2d_dim[-1]]
-
-        for linear in self.linear_out_list:
-            x = linear(x)
-
-        x = (x + mi.transpose(x, perm=[0, 2, 1, 3])) / 2
-
-        x = self.out(x)
-
-        # x = mi.squeeze(x[:, :, :, 0], axis=-1) # -> [N, L, L, 1] -> [NLL]
-
-        # x = x * (1.0 - mi.eye(x.shape[1], dtype='float32'))
-
-        # x = mi.max(x, axis=-1)
-
-        # how to go from the LxL matrix to the unpaired probability
-        # x = F.sigmoid(mi.sum(x, axis=-1))
-        # concatenate or multiply (which reduces the feature dimension to 1)
-        # x = mi.bmm(x, mi.transpose(x, perm=[0, 2, 1]))
-        return x # mi.squeeze(x[:,:,1], axis=-1)
-
-    def summary(self, input_size=None):
-        if input_size is None:
-            if hasattr(self.embed, 'embed'):
-                input_size = (4, 512)
-            else:
-                input_size = (4, 512, self.feature_dim)
-        return mi.summary(self, input_size)
-
-
-class Seq2Mat_LSTMConv2DNet(nn.Layer):
-    """ This ignores all inter-residue information  """
-    def __init__(self, args):
-        super(Seq2Mat_LSTMConv2DNet, self).__init__()
-        nn.initializer.set_global_initializer(nn.initializer.KaimingNormal(), nn.initializer.Constant(0.0))
-
-        self.act_fn = args.act_fn
-        self.norm_fn = args.norm_fn
-        self.dropout = float(args.dropout)
-        self.norm_axis = int(args.norm_axis)
-
-        self.data_format = 'NLC'
-        self.feature_dim = int(args.feature_dim)
-
-        in_features = self.feature_dim # keep record of current feature dim
-
-        self.embed = MyEmbeddingLayer(args, in_features=in_features)
-        in_features = self.embed.out_features
-
-        self.linear_in = MyLinearTower(args, in_features=in_features)
-        in_features = self.linear_in.out_features
-
-        self.lstm = MyLSTMTower(args, in_features=in_features)
-        in_features = self.lstm.out_features
-
-        in_features = in_features * 2 # due to outer concatenation
-        self.conv2d = MyConv2DTower(args, in_features=in_features)
-        in_features = self.conv2d.out_features
-
-        self.linear_out_list = []
-        for i in range(2):
-            self.linear_out_list.append(nn.Sequential(*MyLinearBlock(
-                [in_features, in_features], #, feature_dim // 2],
-                dropout = self.dropout,
-                act_fn = self.act_fn,
-                norm_fn = self.norm_fn,
-                data_format = self.data_format,
-            )))
-            in_features = in_features
-
-            self.add_sublayer(f'linear_out{i}', self.linear_out_list[i])
-            # setattr(self, f'blk3layer{i}', self.blk3_linear[i])
-
-        self.out = nn.Sequential(
-            nn.Linear(in_features=in_features, out_features=2),
-            # nn.ReLU(),
-            # nn.Softmax(axis=-1),
-        )
-
-    def forward(self, x, seqs_len=None):
-
-        x = self.embed(x)
-        x = self.linear_in(x, seqs_len=seqs_len)
-        x = self.lstm(x, seqs_len=seqs_len)
-
-        # for each channel/feature, get a LxL matrix
-        x = mi.transpose(x, perm=[0, 2, 1]) # [NLC] --> [NCL]
-        new_shape = [x.shape[0], x.shape[1], x.shape[2], x.shape[2]]
-        x = mi.concat([mi.broadcast_to(mi.unsqueeze(x, axis=3), shape=new_shape),
-                       mi.broadcast_to(mi.unsqueeze(x, axis=2), shape=new_shape)],
-                       axis=1) # [NCLL] --> [N, 2*C, L, L]
-
-        x = self.conv2d(x, seqs_len=seqs_len)
-
-        x = mi.transpose(x, perm=[0, 3, 2, 1]) # --> [N, L, L, 2*conv2d_dim[-1]]
-        for linear in self.linear_out_list:
-            x = linear(x)
-
-        x = (x + mi.transpose(x, perm=[0, 2, 1, 3])) / 2
-
-        x = self.out(x)
-
-        return x # mi.squeeze(x[:,:,1], axis=-1)
-
-    def summary(self, input_size=None):
-        if input_size is None:
-            if hasattr(self.embed, 'embed'):
-                input_size = (4, 512)
-            else:
-                input_size = (4, 512, self.feature_dim)
-        return mi.summary(self, input_size)
-
-
-class Seq2Mat_Conv1DLSTMConv2DNet(nn.Layer):
-    """ This ignores all inter-residue information  """
-    def __init__(self, args):
-        super(Seq2Mat_Conv1DLSTMConv2DNet, self).__init__()
-        nn.initializer.set_global_initializer(nn.initializer.KaimingNormal(), nn.initializer.Constant(0.0))
-
-        self.act_fn = args.act_fn
-        self.norm_fn = args.norm_fn
-        self.dropout = float(args.dropout)
-        self.norm_axis = int(args.norm_axis)
-
-        self.data_format = 'NLC'
-        self.feature_dim = int(args.feature_dim)
-
-        in_features = self.feature_dim # keep record of current feature dim
-
-        self.embed = MyEmbeddingLayer(args, in_features=in_features)
-        in_features = self.embed.out_features
-
-        self.linear_in = MyLinearTower(args, in_features=in_features)
-        in_features = self.linear_in.out_features
-
-        self.conv1d = MyConv1DTower(args, in_features=in_features)
-        in_features = self.conv1d.out_features
-
-        self.lstm = MyLSTMTower(args, in_features=in_features)
-        in_features = self.lstm.out_features
-
-        in_features = in_features * 2 # due to outer concatenation
-        self.conv2d = MyConv2DTower(args, in_features=in_features)
-        in_features = self.conv2d.out_features
-
-        self.linear_out_list = []
-        for i in range(2):
-            self.linear_out_list.append(nn.Sequential(*MyLinearBlock(
-                [in_features, in_features], #, feature_dim // 2],
-                dropout = self.dropout,
-                act_fn = self.act_fn,
-                norm_fn = self.norm_fn,
-                data_format = self.data_format,
-            )))
-            in_features = in_features
-
-            self.add_sublayer(f'linear_out{i}', self.linear_out_list[i])
-            # setattr(self, f'blk3layer{i}', self.blk3_linear[i])
-
-        self.out = nn.Sequential(
-            nn.Linear(in_features=in_features, out_features=2),
-            # nn.ReLU(),
-            # nn.Softmax(axis=-1),
-        )
-
-    def forward(self, x, seqs_len=None):
-
-        x = self.embed(x)
-        x = self.linear_in(x, seqs_len=seqs_len)
-        x = self.conv1d(x, seqs_len=seqs_len)
-        x = self.lstm(x, seqs_len=seqs_len)
-
-        # for each channel/feature, get a LxL matrix
-        x = mi.transpose(x, perm=[0, 2, 1]) # [NLC] --> [NCL]
-        new_shape = [x.shape[0], x.shape[1], x.shape[2], x.shape[2]]
-        x = mi.concat([mi.broadcast_to(mi.unsqueeze(x, axis=3), shape=new_shape),
-                       mi.broadcast_to(mi.unsqueeze(x, axis=2), shape=new_shape)],
-                       axis=1) # [NCLL] --> [N, 2*C, L, L]
-
-        x = self.conv2d(x, seqs_len=seqs_len)
-
-        x = mi.transpose(x, perm=[0, 3, 2, 1]) # --> [N, L, L, 2*conv2d_dim[-1]]
-        for linear in self.linear_out_list:
-            x = linear(x)
-
-        x = (x + mi.transpose(x, perm=[0, 2, 1, 3])) / 2
-
-        x = self.out(x)
-
-        return x # mi.squeeze(x[:,:,1], axis=-1)
-
-    def summary(self, input_size=None):
-        if input_size is None:
-            if hasattr(self.embed, 'embed'):
-                input_size = (4, 512)
-            else:
-                input_size = (4, 512, self.feature_dim)
-        return mi.summary(self, input_size)
