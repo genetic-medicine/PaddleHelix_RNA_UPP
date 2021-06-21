@@ -4,6 +4,7 @@
 基于百度发布的RNA二级结构预测算法LinearFold和RNA配分方程算法LinearPartition，预测给定RNA序列在每个位点上保持不成对的概率.
 
 详细请见： https://aistudio.baidu.com/aistudio/competition/detail/61
+
 aistudio源代码公开: https://aistudio.baidu.com/aistudio/projectdetail/1479469
 
 ## 生物基础 ## 
